@@ -4,17 +4,13 @@ on:
   workflow_dispatch:
     inputs:
       mode:
-        description: 'merge = keep your own commits; force = hard reset main to upstream'
+        description: 'merge = keep your own commits; force = discard them'
         required: false
         default: merge
-      upstream_branch:
-        description: 'upstream branch to sync from'
+      source_branch:
+        description: 'source branch to pull from'
         required: false
         default: main
-      with_tags:
-        description: 'also sync tags'
-        required: false
-        default: 'true'
 
 permissions:
   contents: write
@@ -23,49 +19,66 @@ jobs:
   sync:
     runs-on: ubuntu-latest
     steps:
-      - name: Checkout RJTv
+      - name: Checkout
         uses: actions/checkout@v4
         with:
           fetch-depth: 0
 
-      - name: Configure
+      - name: Configure git
         run: |
           git config user.name "mirror-bot"
           git config user.email "mirror-bot@users.noreply.github.com"
 
-      - name: Fetch upstream
+      - name: Fetch source
         env:
-          UP_BRANCH: ${{ github.event.inputs.upstream_branch }}
+          SRC_BRANCH: ${{ github.event.inputs.source_branch }}
         run: |
+          git fetch origin main
           git remote add upstream https://github.com/MoonTechLab/LunaTV.git
-          git fetch --tags upstream "$UP_BRANCH"
+          git fetch --tags upstream "$SRC_BRANCH"
 
-      - name: Merge (keep local commits)
+      - name: Merge (keep your commits)
         if: ${{ github.event.inputs.mode == 'merge' }}
         env:
-          UP_BRANCH: ${{ github.event.inputs.upstream_branch }}
+          SRC_BRANCH: ${{ github.event.inputs.source_branch }}
         run: |
           git checkout main
-          git merge --no-edit "upstream/$UP_BRANCH"
+          if ! git merge --no-edit --no-commit "upstream/$SRC_BRANCH"; then
+            echo "::error::合并冲突，请手动处理后再跑"
+            git merge --abort || true
+            exit 1
+          fi
+          bash -c 'git rm -r -q --cached .github/workflows >/dev/null 2>&1 || true
+          rm -rf .github/workflows
+          git checkout origin/main -- .github/workflows 2>/dev/null || true'
+          git add -A
+          git commit -m "chore: merge from MoonTechLab/LunaTV" || echo "没有需要提交的变更"
 
-      - name: Force reset (discard local commits)
+      - name: Force reset (discard your commits)
         if: ${{ github.event.inputs.mode == 'force' }}
         env:
-          UP_BRANCH: ${{ github.event.inputs.upstream_branch }}
+          SRC_BRANCH: ${{ github.event.inputs.source_branch }}
         run: |
           git checkout main
-          git reset --hard "upstream/$UP_BRANCH"
+          git reset --hard "upstream/$SRC_BRANCH"
+          bash -c 'git rm -r -q --cached .github/workflows >/dev/null 2>&1 || true
+          rm -rf .github/workflows
+          git checkout origin/main -- .github/workflows 2>/dev/null || true'
+          git add -A
+          git commit -m "chore: reset to MoonTechLab/LunaTV" || echo "没有需要提交的变更"
 
       - name: Push
         env:
           PAT: ${{ secrets.MIRROR_PAT }}
           TOKEN: ${{ secrets.GITHUB_TOKEN }}
-          WITH_TAGS: ${{ github.event.inputs.with_tags }}
         run: |
-          AUTH="${PAT:-$TOKEN}"
-          git remote set-url origin "https://x-access-token:${AUTH}@github.com/xinyule/Moontv-lunatv.git"
-          git push --force-with-lease origin main
-          if [ "$WITH_TAGS" = "true" ]; then git push --force origin --tags || true; fi
+          git remote set-url origin "https://x-access-token:${PAT:-$TOKEN}@github.com/xinyule/Moontv-lunatv.git"
+          if [ "${{ github.event.inputs.mode }}" = "force" ]; then
+            git push --force origin main
+          else
+            git push origin main
+          fi
+          git push origin --tags || true
 
       - name: Result
         run: git log --oneline -3
