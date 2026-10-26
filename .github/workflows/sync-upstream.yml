@@ -1,0 +1,71 @@
+name: Sync upstream LunaTV
+
+on:
+  workflow_dispatch:
+    inputs:
+      mode:
+        description: 'merge = keep your own commits; force = hard reset main to upstream'
+        required: false
+        default: merge
+      upstream_branch:
+        description: 'upstream branch to sync from'
+        required: false
+        default: main
+      with_tags:
+        description: 'also sync tags'
+        required: false
+        default: 'true'
+
+permissions:
+  contents: write
+
+jobs:
+  sync:
+    runs-on: ubuntu-latest
+    steps:
+      - name: Checkout RJTv
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      - name: Configure
+        run: |
+          git config user.name "mirror-bot"
+          git config user.email "mirror-bot@users.noreply.github.com"
+
+      - name: Fetch upstream
+        env:
+          UP_BRANCH: ${{ github.event.inputs.upstream_branch }}
+        run: |
+          git remote add upstream https://github.com/MoonTechLab/LunaTV.git
+          git fetch --tags upstream "$UP_BRANCH"
+
+      - name: Merge (keep local commits)
+        if: ${{ github.event.inputs.mode == 'merge' }}
+        env:
+          UP_BRANCH: ${{ github.event.inputs.upstream_branch }}
+        run: |
+          git checkout main
+          git merge --no-edit "upstream/$UP_BRANCH"
+
+      - name: Force reset (discard local commits)
+        if: ${{ github.event.inputs.mode == 'force' }}
+        env:
+          UP_BRANCH: ${{ github.event.inputs.upstream_branch }}
+        run: |
+          git checkout main
+          git reset --hard "upstream/$UP_BRANCH"
+
+      - name: Push
+        env:
+          PAT: ${{ secrets.MIRROR_PAT }}
+          TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          WITH_TAGS: ${{ github.event.inputs.with_tags }}
+        run: |
+          AUTH="${PAT:-$TOKEN}"
+          git remote set-url origin "https://x-access-token:${AUTH}@github.com/xinyule/RJTv.git"
+          git push --force-with-lease origin main
+          if [ "$WITH_TAGS" = "true" ]; then git push --force origin --tags || true; fi
+
+      - name: Result
+        run: git log --oneline -3
